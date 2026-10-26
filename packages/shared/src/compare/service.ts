@@ -173,7 +173,9 @@ function buildRows(
     const quote = isRecord(data['market.quote']) ? data['market.quote'] : undefined;
     const valuation = isRecord(data['company.valuation']) ? data['company.valuation'] : undefined;
     const financials = extractFinancials(data['company.financials']);
-    const dividendYield = extractDividendYield(data['company.dividends']);
+    // Valuation supplies dividend yield in percent, including an explicit zero.
+    const dividendYield = toFiniteNumber(valuation?.dpsRate)
+      ?? extractDividendYield(data['company.dividends']);
     const klines = extractKlines(data['market.kline']);
     const rating = extractRatingLabel(data['company.ratings']);
 
