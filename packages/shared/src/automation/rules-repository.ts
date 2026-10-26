@@ -1,6 +1,7 @@
 import type { AutomationRule, AutomationRun } from '@finagent/core'
 import { resolve } from 'node:path'
 import type { JsonFileStore } from '../storage/json-file-store.ts'
+import { withWriteLock } from '../storage/write-lock.ts'
 
 /**
  * Automation persistence (spec §21–25). Two files under the injected
@@ -31,6 +32,13 @@ export class AutomationRuleRepository {
     this.store = store
   }
 
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    // Lock the full read-modify-write cycle, including across store instances.
+    const path = resolve(this.store.resolve(RULES_FILE))
+    const key = process.platform === 'win32' ? path.toLowerCase() : path
+    return withWriteLock(key, operation)
+  }
+
   async list(): Promise<AutomationRule[]> {
     return this.store.read<AutomationRule[]>(RULES_FILE, [])
   }
@@ -42,36 +50,42 @@ export class AutomationRuleRepository {
 
   /** Upsert a rule by id — first-run seeding and UI edits share this path. */
   async save(rule: AutomationRule): Promise<AutomationRule> {
-    const rules = await this.list()
-    const index = rules.findIndex((existing) => existing.id === rule.id)
-    const next = [...rules]
-    if (index >= 0) {
-      next[index] = rule
-    } else {
-      next.push(rule)
-    }
-    await this.store.write(RULES_FILE, next)
-    return rule
+    return this.mutate(async () => {
+      const rules = await this.list()
+      const index = rules.findIndex((existing) => existing.id === rule.id)
+      const next = [...rules]
+      if (index >= 0) {
+        next[index] = rule
+      } else {
+        next.push(rule)
+      }
+      await this.store.write(RULES_FILE, next)
+      return rule
+    })
   }
 
   async remove(id: string): Promise<void> {
-    const rules = await this.list()
-    await this.store.write(
-      RULES_FILE,
-      rules.filter((rule) => rule.id !== id)
-    )
+    await this.mutate(async () => {
+      const rules = await this.list()
+      await this.store.write(
+        RULES_FILE,
+        rules.filter((rule) => rule.id !== id)
+      )
+    })
   }
 
   /** Flip the enabled flag; returns the updated rule, or null when unknown. */
   async enable(id: string, enabled: boolean): Promise<AutomationRule | null> {
-    const rules = await this.list()
-    const index = rules.findIndex((rule) => rule.id === id)
-    if (index < 0) return null
-    const updated = { ...rules[index], enabled }
-    const next = [...rules]
-    next[index] = updated
-    await this.store.write(RULES_FILE, next)
-    return updated
+    return this.mutate(async () => {
+      const rules = await this.list()
+      const index = rules.findIndex((rule) => rule.id === id)
+      if (index < 0) return null
+      const updated = { ...rules[index], enabled }
+      const next = [...rules]
+      next[index] = updated
+      await this.store.write(RULES_FILE, next)
+      return updated
+    })
   }
 }
 

@@ -107,6 +107,7 @@ export class MassiveFinancialDataProvider implements FinancialDataProvider {
   private readonly getApiKey: () => Promise<string | undefined>
   private readonly getEndpoint: () => Promise<string | undefined>
   private readonly cache: TtlCache<ProviderResult<unknown>>
+  private cacheGeneration = 0
 
   constructor(config: MassiveConfig) {
     this.getApiKey = config.getApiKey
@@ -167,6 +168,8 @@ export class MassiveFinancialDataProvider implements FinancialDataProvider {
       }
     }
 
+    // Capture before async config reads so a reset invalidates waiting requests too.
+    const requestGeneration = this.cacheGeneration
     const apiKey = (await this.getApiKey())?.trim()
     if (!apiKey) return { ok: false, error: CONFIG_MISSING }
 
@@ -186,7 +189,7 @@ export class MassiveFinancialDataProvider implements FinancialDataProvider {
         endpoint
       )
       const stamped = stampProviderResult(result, bound.instrumentId)
-      if (stamped.ok) this.cache.set(cacheKey, stamped)
+      if (stamped.ok && requestGeneration === this.cacheGeneration) this.cache.set(cacheKey, stamped)
       return stamped as ProviderResult<T>
     } catch (error) {
       if (
@@ -212,8 +215,9 @@ export class MassiveFinancialDataProvider implements FinancialDataProvider {
     }
   }
 
-  /** Drop cached responses (call after the BYOK key changes). */
+  /** Drop cached responses and prevent earlier requests from repopulating them. */
   clearCache(): void {
+    this.cacheGeneration += 1
     this.cache.clear()
   }
 
