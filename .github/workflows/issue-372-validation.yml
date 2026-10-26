@@ -1,0 +1,107 @@
+name: Compare Dividend Yield Validation
+run-name: Validate issue 372 code 7a2f426
+
+on:
+  push:
+    branches: [ci/issue-372-validation]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-validation-issue-372
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: '1.4.2'
+  CODE_REF: '7a2f426c130ed3ca366320e40dbd082ebc359870'
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: brad0810wz-rgb/folio
+          ref: ${{ env.CODE_REF }}
+          persist-credentials: false
+      - name: Verify PR revision
+        run: test "$(git rev-parse HEAD)" = "$CODE_REF"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Validate checked-out code
+        run: bun run typecheck
+
+  focused-tests:
+    name: Focused tests (shared)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: brad0810wz-rgb/folio
+          ref: ${{ env.CODE_REF }}
+          persist-credentials: false
+      - name: Verify PR revision
+        run: test "$(git rev-parse HEAD)" = "$CODE_REF"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Validate checked-out code
+        run: bun test packages/shared --isolate
+
+  full-unit:
+    name: Full unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: brad0810wz-rgb/folio
+          ref: ${{ env.CODE_REF }}
+          persist-credentials: false
+      - name: Verify PR revision
+        run: test "$(git rev-parse HEAD)" = "$CODE_REF"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Validate checked-out code
+        run: bun test --isolate
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: brad0810wz-rgb/folio
+          ref: ${{ env.CODE_REF }}
+          persist-credentials: false
+      - name: Verify PR revision
+        run: test "$(git rev-parse HEAD)" = "$CODE_REF"
+      - name: Scan for high-signal secret patterns
+        shell: bash
+        run: |
+          set -uo pipefail
+          MATCHED_FILES=$(grep -rIlE \
+            --exclude-dir=node_modules \
+            --exclude-dir=docs \
+            --exclude='*.test.ts' --exclude='*.test.tsx' --exclude='bun.lock' \
+            'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+            . || true)
+          if [ -n "$MATCHED_FILES" ]; then
+            echo '::error::Possible secret patterns found in the following files:'
+            printf '%s\n' "$MATCHED_FILES"
+            exit 1
+          fi
+          echo 'No secret patterns found.'
