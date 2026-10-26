@@ -10,7 +10,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-type FetchResponder = (url: string, init?: RequestInit) => Response
+type FetchResponder = (url: string, init?: RequestInit) => Response | Promise<Response>
 
 function installFetch(responder: FetchResponder): Array<{ url: string; init?: RequestInit }> {
   const calls: Array<{ url: string; init?: RequestInit }> = []
@@ -27,6 +27,23 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { 'content-type': 'application/json' },
   })
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((complete) => { resolve = complete })
+  return { promise, resolve }
+}
+
+function quoteResponse(price: number): Response {
+  const payload = snapshotPayload()
+  payload.ticker.lastTrade.p = price
+  return jsonResponse(payload)
+}
+
+function expectPrice(result: ProviderResult<Quote>, price: number): void {
+  expect(result.ok).toBe(true)
+  if (result.ok) expect(result.data.lastPrice).toBe(price)
 }
 
 function makeProvider(
@@ -364,6 +381,96 @@ describe('MassiveFinancialDataProvider', () => {
     expect(second.ok).toBe(true)
     expect(calls).toHaveLength(1)
   })
+
+  for (const firstResponse of ['old', 'new'] as const) {
+    it('keeps the cleared cache fresh when the ' + firstResponse + ' response finishes first', async () => {
+      const oldResponse = deferred<Response>()
+      const oldFetchStarted = deferred<void>()
+      let endpoint = 'https://old.example.test'
+      let apiKey = 'old-fake-key'
+      const calls = installFetch((url) => {
+        if (new URL(url).origin === 'https://old.example.test') {
+          oldFetchStarted.resolve(undefined)
+          return oldResponse.promise
+        }
+        return quoteResponse(200)
+      })
+      const provider = new MassiveFinancialDataProvider({
+        getApiKey: async () => apiKey,
+        getEndpoint: async () => endpoint,
+      })
+      const pending = provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+      await oldFetchStarted.promise
+
+      apiKey = 'new-fake-key'
+      endpoint = 'https://new.example.test'
+      provider.clearCache()
+      let previous: ProviderResult<Quote>
+      let current: ProviderResult<Quote>
+      if (firstResponse === 'old') {
+        oldResponse.resolve(quoteResponse(100))
+        previous = await pending
+        current = await provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+      } else {
+        current = await provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+        oldResponse.resolve(quoteResponse(100))
+        previous = await pending
+      }
+      const cached = await provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+
+      expectPrice(previous, 100)
+      expectPrice(current, 200)
+      expectPrice(cached, 200)
+      expect(calls.map(({ url }) => new URL(url).origin)).toEqual([
+        'https://old.example.test', 'https://new.example.test',
+      ])
+    })
+  }
+
+  for (const configRead of ['API key', 'endpoint'] as const) {
+    it('invalidates requests already awaiting their ' + configRead, async () => {
+      const configStarted = deferred<void>()
+      const oldConfig = deferred<string>()
+      let firstKey = true
+      let firstEndpoint = true
+      const calls = installFetch((url) => {
+        const parsed = new URL(url)
+        const old = parsed.origin === 'https://old.example.test'
+          || parsed.searchParams.get('apiKey') === 'old-fake-key'
+        return quoteResponse(old ? 100 : 200)
+      })
+      const provider = new MassiveFinancialDataProvider({
+        getApiKey: async () => {
+          if (configRead === 'API key' && firstKey) {
+            firstKey = false
+            configStarted.resolve(undefined)
+            return oldConfig.promise
+          }
+          return 'new-fake-key'
+        },
+        getEndpoint: async () => {
+          if (configRead === 'endpoint' && firstEndpoint) {
+            firstEndpoint = false
+            configStarted.resolve(undefined)
+            return oldConfig.promise
+          }
+          return 'https://new.example.test'
+        },
+      })
+      const pending = provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+      await configStarted.promise
+      provider.clearCache()
+      oldConfig.resolve(configRead === 'API key' ? 'old-fake-key' : 'https://old.example.test')
+      const previous = await pending
+      const current = await provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+      const cached = await provider.execute<Quote>('market.quote', { symbol: 'AAPL.US' })
+
+      expectPrice(previous, 100)
+      expectPrice(current, 200)
+      expectPrice(cached, 200)
+      expect(calls).toHaveLength(2)
+    })
+  }
 
   it('refetches after the cache TTL expires', async () => {
     const calls = installFetch(() => jsonResponse(snapshotPayload()))
