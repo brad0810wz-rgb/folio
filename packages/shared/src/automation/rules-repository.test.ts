@@ -71,6 +71,104 @@ class PausedSnapshotStore extends JsonFileStore {
 }
 
 describe('AutomationRuleRepository', () => {
+  it('preserves concurrent saves of different rules across repository instances', async () => {
+    await store.write('automations.json', [])
+    const pausedStore = new PausedSnapshotStore(dir, true)
+    const first = new AutomationRuleRepository(pausedStore)
+    const second = new AutomationRuleRepository(new PausedSnapshotStore(join(dir, '.')))
+    const firstSave = first.save(rule('r1'))
+    await pausedStore.snapshotReady
+    const secondSave = second.save(rule('r2'))
+    pausedStore.resume()
+    await Promise.all([firstSave, secondSave])
+
+    const fresh = new AutomationRuleRepository(new JsonFileStore(dir))
+    expect((await fresh.list()).map((entry) => entry.id).sort()).toEqual(['r1', 'r2'])
+  })
+
+  for (const operation of ['save', 'enable'] as const) {
+    it('preserves concurrent toggles of different rules using ' + operation, async () => {
+      await store.write('automations.json', [rule('r1'), rule('r2')])
+      const pausedStore = new PausedSnapshotStore(dir, true)
+      const first = new AutomationRuleRepository(pausedStore)
+      const second = new AutomationRuleRepository(new PausedSnapshotStore(join(dir, '.')))
+      const firstUpdate = operation === 'save'
+        ? first.save(rule('r1', { enabled: false }))
+        : first.enable('r1', false)
+      await pausedStore.snapshotReady
+      const secondUpdate = operation === 'save'
+        ? second.save(rule('r2', { enabled: false }))
+        : second.enable('r2', false)
+      pausedStore.resume()
+      await Promise.all([firstUpdate, secondUpdate])
+
+      const fresh = new AutomationRuleRepository(new JsonFileStore(dir))
+      expect(await fresh.list()).toEqual([
+        rule('r1', { enabled: false }),
+        rule('r2', { enabled: false }),
+      ])
+    })
+  }
+
+  for (const firstOperation of ['remove', 'save'] as const) {
+    it('preserves removal and another rule update when ' + firstOperation + ' reads first', async () => {
+      await store.write('automations.json', [rule('r1'), rule('r2')])
+      const pausedStore = new PausedSnapshotStore(dir, true)
+      const first = new AutomationRuleRepository(pausedStore)
+      const second = new AutomationRuleRepository(new PausedSnapshotStore(join(dir, '.')))
+      const firstMutation = firstOperation === 'remove'
+        ? first.remove('r1')
+        : first.save(rule('r2', { enabled: false }))
+      await pausedStore.snapshotReady
+      const secondMutation = firstOperation === 'remove'
+        ? second.save(rule('r2', { enabled: false }))
+        : second.remove('r1')
+      pausedStore.resume()
+      await Promise.all([firstMutation, secondMutation])
+
+      const fresh = new AutomationRuleRepository(new JsonFileStore(dir))
+      expect(await fresh.list()).toEqual([rule('r2', { enabled: false })])
+    })
+  }
+
+  it('allows a queued rule save to succeed after an earlier write fails', async () => {
+    class FailingStore extends JsonFileStore {
+      async write(_file: string, _data: unknown): Promise<void> {
+        throw new Error('simulated rule write failure')
+      }
+    }
+    const first = new AutomationRuleRepository(new FailingStore(dir))
+    const second = new AutomationRuleRepository(new JsonFileStore(dir))
+    const results = await Promise.allSettled([
+      first.save(rule('r1')),
+      second.save(rule('r2')),
+    ])
+
+    expect(results[0].status).toBe('rejected')
+    if (results[0].status === 'rejected') {
+      expect(results[0].reason.message).toBe('simulated rule write failure')
+    }
+    expect(results[1].status).toBe('fulfilled')
+    const fresh = new AutomationRuleRepository(new JsonFileStore(dir))
+    expect(await fresh.list()).toEqual([rule('r2')])
+  })
+
+  const windowsOnly = process.platform === 'win32' ? it : it.skip
+  windowsOnly('shares rule mutations across Windows path casing', async () => {
+    await store.write('automations.json', [])
+    const pausedStore = new PausedSnapshotStore(dir, true)
+    const first = new AutomationRuleRepository(pausedStore)
+    const second = new AutomationRuleRepository(new PausedSnapshotStore(dir.toUpperCase()))
+    const firstSave = first.save(rule('r1'))
+    await pausedStore.snapshotReady
+    const secondSave = second.save(rule('r2'))
+    pausedStore.resume()
+    await Promise.all([firstSave, secondSave])
+
+    const fresh = new AutomationRuleRepository(new JsonFileStore(dir))
+    expect((await fresh.list()).map((entry) => entry.id).sort()).toEqual(['r1', 'r2'])
+  })
+
   it('round-trips rules across repository instances (restart)', async () => {
     await new AutomationRuleRepository(store).save(rule('r1', { strategyId: 'value' }))
 
