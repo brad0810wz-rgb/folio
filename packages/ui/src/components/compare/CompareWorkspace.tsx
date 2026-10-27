@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtom } from 'jotai';
 import {
@@ -23,11 +23,14 @@ export const CompareWorkspace: React.FC = () => {
   const [settings, setSettings] = useAtom(compareViewSettingsAtom);
   const [state, setState] = useAtom(comparisonStateAtom);
   const [input, setInput] = useState('');
+  const requestGeneration = useRef(0);
 
   const build = useCallback(
     async (list: string[]) => {
+      const generation = ++requestGeneration.current;
       setState({ data: null, loading: true, error: null });
       const data = await loadComparison(list);
+      if (generation !== requestGeneration.current) return;
       if (data) {
         setState({ data, loading: false, error: null });
       } else {
@@ -43,6 +46,8 @@ export const CompareWorkspace: React.FC = () => {
     } else {
       setState({ data: null, loading: false, error: null });
     }
+    // Invalidate responses for the previous selection and after unmount.
+    return () => { requestGeneration.current += 1; };
   }, [symbols, build, setState]);
 
   const restoreSavedView = useCallback(
