@@ -1,5 +1,5 @@
 name: Issue 396 Fork Validation
-run-name: Validate issue 396 code 2b8146c
+run-name: Validate issue 396 code 861a77d
 
 on:
   push:
@@ -14,7 +14,7 @@ concurrency:
 
 env:
   BUN_VERSION: '1.4.2'
-  CODE_REF: '2b8146ca6cd046e2507ffc98ac3bca7b9242f116'
+  CODE_REF: '861a77d707f8a5b4e74e905523491ebad429cae8'
 
 jobs:
   typecheck:
@@ -35,7 +35,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Validate checked-out code
-        run: bun run typecheck
+        run: |
+          bun run typecheck
+          bun node_modules/typescript/bin/tsc --noEmit --project packages/longbridge-tools/tsconfig.json
 
   focused-tests:
     name: Focused tests (UI)
