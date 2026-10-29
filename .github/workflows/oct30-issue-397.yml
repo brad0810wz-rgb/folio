@@ -1,5 +1,5 @@
 name: Issue 397 Fork Validation
-run-name: Validate issue 397 code 95e5e20
+run-name: Validate issue 397 code 2fd8d1a
 
 on:
   push:
@@ -14,7 +14,7 @@ concurrency:
 
 env:
   BUN_VERSION: '1.4.2'
-  CODE_REF: '95e5e20710a955059911c50b136588fc4f69a5e2'
+  CODE_REF: '2fd8d1ae1c8afe2327ff4984d1fbdec21d6a856a'
 
 jobs:
   typecheck:
@@ -40,7 +40,7 @@ jobs:
           bun node_modules/typescript/bin/tsc --noEmit --project packages/longbridge-tools/tsconfig.json
 
   focused-tests:
-    name: Focused tests (financial data)
+    name: Focused tests (affected packages)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
